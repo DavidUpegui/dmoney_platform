@@ -5,9 +5,6 @@ out/
 target/
 node_modules/
 
-# dmoney_back checked out by contract-sync (must not be committed as a gitlink)
-/back/
-
 # Local environment
 .env
 .env.local

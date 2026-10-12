@@ -1,7 +1,14 @@
 # ADR 0002 — Contract as a versioned artifact, not a runtime broker
 
-- **Status:** Accepted
+- **Status:** Superseded (see note)
 - **Date:** 2026-10-12
+
+> **Note (update):** The artifact automation described here (generated
+> `openapi.json`, `repository_dispatch`, `contract-sync`, `contract-gate`) was
+> removed. The contract is now **hand-maintained documentation**
+> (`contracts/API_CONTRACT.md` + `dmoney_back/docs/api.md`), read locally by the
+> front-end's agents. The core decision still holds: the contract is a file, not
+> a runtime broker.
 
 ## Context
 
