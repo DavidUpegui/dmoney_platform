@@ -18,35 +18,33 @@ first publishes it. Until then, `API_CONTRACT.md` is the only contract artifact.
 
 ```
 [dmoney_back] push to trunk
-  ├─ CI: ./gradlew build + export openapi.json
+  ├─ CI: build + test
   └─ repository-dispatch → [dmoney_platform]
         ├─ contract-sync.yml: commit contracts/openapi.json
         └─ contract-gate.yml (on PR): oasdiff breaking-change check
-                                   │
-[dmoney_front] push/PR        │
-  ├─ pulls contracts/openapi.json ←─────────────┘
-  ├─ regenerates TS types
-  └─ fails if generated types drift
+
+[dmoney_front] reads contracts/ as a read-only reference (via opencode.json)
 ```
 
 ### Producer — `dmoney_back`
 
-- CI exports `openapi.json` and dispatches a `contract-sync` event to this repo.
+- CI dispatches a `contract-sync` event to this repo on every trunk push.
 - A change to any endpoint/model must be reflected in the generated spec in the
   same change set.
 
 ### Hub — `dmoney_platform` (this repo)
 
-- `contract-sync` commits the received spec (via PR on `trunk`).
+- `contract-sync` regenerates the spec from the back-end and commits it (via PR
+  on `trunk`).
 - `contract-gate` runs `oasdiff` against the previously released spec. A
   breaking change fails the check and must be recorded in `CHANGELOG.md`.
 
 ### Consumer — `dmoney_front`
 
-- Vendors `contracts/openapi.json` into the front repo and regenerates types
-  (`openapi-typescript`).
-- CI fails if regenerated types differ from what is committed, so a stale
-  consumer can never merge.
+- Reads `contracts/openapi.json` and `API_CONTRACT.md` as the reference source
+  of truth (wired through `dmoney_front/opencode.json`).
+- There is no code generation or drift gate; the contract is documentation for
+  the front-end and its agents.
 
 ## Versioning
 

@@ -47,8 +47,8 @@ both sides read from and CI writes to.
 
 The HTTP interface is the seam between the two repos and its source of truth is
 `contracts/` in this repo. See `contracts/README.md` for the flow:
-back-end generates → platform commits and gates → front-end vendors and
-type-checks.
+back-end generates → platform commits and gates → front-end reads it as a
+read-only reference.
 
 ## Environments
 

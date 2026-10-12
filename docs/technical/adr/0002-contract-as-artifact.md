@@ -17,24 +17,29 @@ runtime:
 - The back-end generates `openapi.json` (SpringDoc) in CI.
 - The platform receives it via a push-triggered `repository-dispatch`, gates it
   with `oasdiff`, and commits it under `contracts/`.
-- The front-end vendors the artifact and generates TypeScript types; CI fails on
-  drift.
+- The front-end reads the artifact as a **read-only reference** (no code
+  generation, no drift gate).
 
-Agents read the vendored file locally (via `opencode.json` references). No
-network round-trip, no broker service.
+Agents read the file locally (via `opencode.json` references). No network
+round-trip, no broker service.
 
 ## Rationale
 
 - The data is fundamentally static and versionable — a runtime proxy adds a
   dependency, a failure point, and nondeterminism for no benefit.
-- Local, vendored context is reproducible and works offline.
+- Local context is reproducible and works offline.
 - Breaking changes become explicit and reviewable (diff + gate), which a
   pass-through broker would hide.
+- Generated TypeScript types were considered and rejected for now: a blocking
+  drift gate adds friction disproportionate to the value for a solo project.
+  The contract remains available for reference and can be code-generated later.
 
 ## Consequences
 
-- Duplicate copies exist (platform + vendored in front); CI enforces equality.
-- Consumers must pull the artifact, so there is a small lag between a back-end
-  change and the front-end seeing it — acceptable and intentional.
-- If dynamic tooling is ever genuinely needed (e.g. live deploy status), an MCP
-  server can be added later without changing this contract flow.
+- The contract lives in one place (platform); the front-end points at it rather
+  than keeping a synced copy.
+- Consumers see a change only once the sync PR is merged, so there is a small
+  lag between a back-end change and the front-end noticing it — acceptable and
+  intentional.
+- If dynamic tooling is ever genuinely needed (e.g. live deploy status or
+  generated types), it can be added later without changing this contract flow.

@@ -11,7 +11,9 @@ no server is required to run it.
 | `dmoney_back` | `notify-platform.yml` | push `trunk`,`main` | dispatch `openapi-updated` to platform |
 | `dmoney_platform` | `contract-sync.yml` | `repository_dispatch` | boot back-end, fetch `/v3/api-docs`, open PR updating `contracts/openapi.json` |
 | `dmoney_platform` | `contract-gate.yml` | PR touching `contracts/openapi.json` | `oasdiff` breaking-change check |
-| `dmoney_front` | `contract-check.yml` | push/PR `trunk`,`main` | vendor contract, regenerate `src/types/api-schema.d.ts`, fail on drift |
+
+The front-end has no CI step here. It consumes `contracts/` as a read-only
+reference (via `opencode.json`); there is no generated-types drift gate.
 
 ## Flow
 
@@ -23,10 +25,7 @@ dmoney_back push → trunk
                                             ├─ boot back-end
                                             ├─ curl /v3/api-docs → contracts/openapi.json
                                             └─ open PR
-                                                 └─ contract-gate.yml (oasdiff)
-                                                      (on PR)  │
-dmoney_front push/PR ────────────────────────────────────────┘
-   └─ contract-check.yml (pull contract, regenerate types, fail on drift)
+                                                 └─ contract-gate.yml (oasdiff, on PR)
 ```
 
 ## Required repository secrets
@@ -36,7 +35,6 @@ dmoney_front push/PR ───────────────────�
 | `dmoney_back` | `PLATFORM_DISPATCH_TOKEN` | Fine-grained PAT / App token allowed to send `repository_dispatch` to `dmoney_platform`. |
 | `dmoney_platform` | `CONTRACT_SYNC_TOKEN` | Read access to `dmoney_back` (to check it out and boot it). |
 | `dmoney_platform` | `PLATFORM_PR_TOKEN` | Open the sync PR. Must be a PAT: PRs opened with `GITHUB_TOKEN` do not trigger `contract-gate`. |
-| `dmoney_front` | `PLATFORM_READ_TOKEN` | Read access to `dmoney_platform` if it is private (`GITHUB_TOKEN` works if it is public). |
 
 `GITHUB_TOKEN` is provided automatically by GitHub per workflow run, but it is
 scoped to the current repository **and** events it triggers do not start new

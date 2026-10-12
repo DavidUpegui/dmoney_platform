@@ -33,8 +33,9 @@ The contract between front and back lives in `contracts/`:
 - `CHANGELOG.md` — contract version / breaking-change history.
 
 The back-end publishes `openapi.json` on every push to `trunk`; the
-`contract-sync` workflow in this repo receives it, the `contract-gate` workflow
-checks it for breaking changes, and the front-end vendors it to generate types.
+`contract-sync` workflow in this repo receives it, and the `contract-gate`
+workflow checks it for breaking changes. The front-end reads the contract as a
+read-only reference.
 
 See `contracts/README.md` for the full flow.
 
