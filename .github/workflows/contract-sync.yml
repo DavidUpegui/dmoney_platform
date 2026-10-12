@@ -87,9 +87,11 @@ jobs:
         run: tail -n 200 /tmp/back.log || true
 
       - name: Open sync PR
+        # Must use a PAT, not GITHUB_TOKEN: PRs opened with GITHUB_TOKEN do not
+        # trigger other workflows, so the contract-gate check would be skipped.
         uses: peter-evans/create-pull-request@v6
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PLATFORM_PR_TOKEN }}
           branch: contract/sync
           delete-branch: true
           commit-message: "contract: sync openapi.json from dmoney_back@${{ env.BACK_REF }}"

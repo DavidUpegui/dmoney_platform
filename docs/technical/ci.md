@@ -35,9 +35,12 @@ dmoney_front push/PR ───────────────────�
 | ---- | ------ | ------- |
 | `dmoney_back` | `PLATFORM_DISPATCH_TOKEN` | Fine-grained PAT / App token allowed to send `repository_dispatch` to `dmoney_platform`. |
 | `dmoney_platform` | `CONTRACT_SYNC_TOKEN` | Read access to `dmoney_back` (to check it out and boot it). |
+| `dmoney_platform` | `PLATFORM_PR_TOKEN` | Open the sync PR. Must be a PAT: PRs opened with `GITHUB_TOKEN` do not trigger `contract-gate`. |
 | `dmoney_front` | `PLATFORM_READ_TOKEN` | Read access to `dmoney_platform` if it is private (`GITHUB_TOKEN` works if it is public). |
 
-`GITHUB_TOKEN` is provided automatically and is used by `create-pull-request`.
+`GITHUB_TOKEN` is provided automatically by GitHub per workflow run, but it is
+scoped to the current repository **and** events it triggers do not start new
+workflow runs. That is why cross-repo steps use PATs.
 
 ## Local equivalents
 
