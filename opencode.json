@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["AGENTS.md"],
+  "references": {
+    "contracts": {
+      "path": "contracts",
+      "description": "Shared HTTP contract between front and back. Curated semantics in API_CONTRACT.md; generated machine truth in openapi.json. Read before changing any API surface."
+    },
+    "docs": {
+      "path": "docs",
+      "description": "Cross-repo business docs (docs/business) and technical docs (docs/technical). Use for product context, domain rules, and cross-repo architecture."
+    }
+  }
+}

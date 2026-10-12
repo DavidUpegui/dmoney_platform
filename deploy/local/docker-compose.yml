@@ -1,0 +1,48 @@
+# Local development stack for dmoney: Postgres + the Spring Boot back-end.
+# The front-end runs separately via Expo (see deploy/README.md).
+#
+#   docker compose -f deploy/local/docker-compose.yml up
+#
+# The back-end source is mounted from the sibling dmoney_back repo and run with
+# Gradle in development mode, so code changes are picked up on restart.
+
+services:
+  db:
+    image: postgres:16
+    container_name: dmoney-db
+    environment:
+      POSTGRES_DB: dmoney
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+    ports:
+      - "5432:5432"
+    volumes:
+      - dmoney-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dmoney"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    image: gradle:8.10-jdk21
+    container_name: dmoney-back
+    working_dir: /workspace
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/dmoney
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: root
+    volumes:
+      - ../../../dmoney_back:/workspace
+      - dmoney-gradle:/home/gradle/.gradle
+    command: ./gradlew bootRun --no-daemon
+    ports:
+      - "8080:8080"
+
+volumes:
+  dmoney-pgdata:
+  dmoney-gradle:

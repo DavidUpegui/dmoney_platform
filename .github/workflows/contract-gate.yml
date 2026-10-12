@@ -1,0 +1,44 @@
+name: Contract Gate
+
+# Fails a PR that changes the contract in a backwards-incompatible way.
+# Compares the PR's contracts/openapi.json against the base branch version.
+
+on:
+  pull_request:
+    paths:
+      - contracts/openapi.json
+
+permissions:
+  contents: read
+
+jobs:
+  breaking-change:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract base contract
+        id: base
+        run: |
+          mkdir -p /tmp/base
+          if git show "origin/${{ github.base_ref }}:contracts/openapi.json" > /tmp/base/openapi.json 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No base contract yet; skipping gate (first publish)."
+          fi
+
+      - name: Detect breaking changes (oasdiff)
+        if: steps.base.outputs.exists == 'true'
+        run: |
+          docker run --rm \
+            -v "$PWD/contracts:/revision:ro" \
+            -v "/tmp/base:/base:ro" \
+            tufin/oasdiff breaking /base/openapi.json /revision/openapi.json --fail-on ERR
+
+      - name: Reminder
+        if: steps.base.outputs.exists != 'true'
+        run: echo "First contract publish — no baseline to compare against yet."

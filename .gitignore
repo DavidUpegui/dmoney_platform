@@ -1,0 +1,19 @@
+# Build / tooling artifacts
+build/
+dist/
+out/
+target/
+node_modules/
+
+# Local environment
+.env
+.env.local
+*.local
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Logs
+*.log
