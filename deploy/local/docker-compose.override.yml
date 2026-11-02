@@ -1,0 +1,16 @@
+# Local-only override: publish dmoney on free host ports so it can run next to
+# other stacks that already own 5432/8080. The backend still reaches Postgres
+# through the Compose network at db:5432.
+#
+#   docker compose -f deploy/local/docker-compose.yml \
+#     -f deploy/local/docker-compose.override.yml up
+#
+# `./dev` uses both files automatically.
+services:
+  db:
+    ports: !override
+      - "127.0.0.1:${DB_HOST_PORT:-5434}:5432"
+
+  backend:
+    ports: !override
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8090}:8080"
