@@ -6,7 +6,9 @@ CI runs on **GitHub Actions cloud runners**; no server is required.
 
 | Repo | Workflow | Trigger | Does |
 | ---- | -------- | ------- | ---- |
-| `dmoney_back` | `ci.yml` | push/PR `trunk`,`main` | build, test, Sonar |
+| `dmoney_back` | `ci.yml` | push/PR `trunk` | build, tests, JaCoCo, Sonar |
+| `dmoney_front` | `ci.yml` | push/PR `trunk` | typecheck, lint, requirements audit, tests |
+| `dmoney_platform` | — | — | no CI; diffs are reviewed manually |
 
 There is no contract pipeline. The API contract is documentation only:
 

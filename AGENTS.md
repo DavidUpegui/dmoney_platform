@@ -63,6 +63,9 @@ a remote host exists.
 
 ## Cross-cutting conventions
 
+- **Git**: `docs/technical/git-workflow.md` is the authoritative policy for
+  branches, commits, PRs and merges in all three repositories. `trunk` is the
+  only long-lived branch; work lands through squashed PRs.
 - **Spec-first** applies on both sides. Each repo has its own `specs/` workflow
   (`dmoney_back/specs/`, `dmoney_front/specs/`); respect the one that owns the
   change.
