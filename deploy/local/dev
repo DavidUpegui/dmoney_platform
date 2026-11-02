@@ -1,0 +1,347 @@
+#!/usr/bin/env bash
+#
+# dev — one entry point for the local dmoney stack.
+#
+#   ./dev              build if needed, start db + back + API tunnel, then Expo
+#   ./dev up           same without Expo (leaves the API tunnel running)
+#   ./dev app          start Expo using the current API tunnel
+#   ./dev down         stop Expo, Compose and the API tunnel
+#   ./dev reset        down + wipe the database volume
+#   ./dev status       show containers, ports and API URL
+#   ./dev logs         follow back-end logs
+#
+# Ctrl-C in `./dev` stops Expo and the API tunnel; the Compose stack stays up.
+#
+# Configuration: deploy/local/.env (copy .env.example). Ports default to
+# 8090 (back-end) and 5434 (Postgres) to avoid other local stacks.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLATFORM_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+WORKSPACE_DIR="$(cd "$PLATFORM_DIR/.." && pwd)"
+BACK_DIR="$WORKSPACE_DIR/dmoney_back"
+FRONT_DIR="$WORKSPACE_DIR/dmoney_front"
+
+COMPOSE_BASE="$SCRIPT_DIR/docker-compose.yml"
+COMPOSE_OVERRIDE="$SCRIPT_DIR/docker-compose.override.yml"
+STATE_DIR="$SCRIPT_DIR/.dev"
+API_URL_FILE="$STATE_DIR/api-url"
+CF_PID_FILE="$STATE_DIR/cloudflared.pid"
+CF_LOG="$STATE_DIR/cloudflared.log"
+
+# Load local overrides (ports, secret). The file is git-ignored.
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$SCRIPT_DIR/.env"
+  set +a
+fi
+
+BACKEND_HOST_PORT="${BACKEND_HOST_PORT:-8090}"
+DB_HOST_PORT="${DB_HOST_PORT:-5434}"
+EXPO_PORT="${EXPO_PORT:-8083}"
+JWT_SECRET="${JWT_SECRET:-dev-secret-do-not-use-in-prod-0123456789}"
+export BACKEND_HOST_PORT DB_HOST_PORT JWT_SECRET
+
+JAR="$BACK_DIR/build/libs/dmoney-0.0.1-SNAPSHOT.jar"
+JAR_BUILT=0
+COMPOSE=(docker compose --project-directory "$SCRIPT_DIR" -f "$COMPOSE_BASE" -f "$COMPOSE_OVERRIDE")
+
+say() { printf '\n==> %s\n' "$*"; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || die "required command '$1' not found in PATH"
+}
+
+port_listening() {
+  ss -ltn "sport = :$1" 2>/dev/null | grep -q LISTEN
+}
+
+compose_service_running() {
+  "${COMPOSE[@]}" ps --status running --services 2>/dev/null | grep -qx "$1"
+}
+
+login_code() {
+  curl -s -o /dev/null -w '%{http_code}' -m 5 \
+    -X POST "$1/auth/login" \
+    -H 'Content-Type: application/json' \
+    -d '{"email":"emailprueba@gmail.com","password":"password"}' 2>/dev/null || true
+}
+
+ensure_override() {
+  [[ -f "$COMPOSE_OVERRIDE" ]] && return 0
+  say "Creating $COMPOSE_OVERRIDE"
+  cat >"$COMPOSE_OVERRIDE" <<EOF
+services:
+  db:
+    ports: !override
+      - "127.0.0.1:${DB_HOST_PORT}:5432"
+  backend:
+    ports: !override
+      - "127.0.0.1:${BACKEND_HOST_PORT}:8080"
+EOF
+}
+
+check_memory() {
+  local available
+  available="$(awk '/MemAvailable/ { print int($2 / 1024) }' /proc/meminfo 2>/dev/null || echo 0)"
+  if [[ "$available" -gt 0 && "$available" -lt 1200 ]]; then
+    printf 'warning: only %s MB of RAM available; the stack may struggle.\n' "$available" >&2
+  fi
+}
+
+assert_port_free() {
+  local port="$1" service="$2"
+  if port_listening "$port"; then
+    if compose_service_running "$service"; then
+      return 0
+    fi
+    die "port $port is already in use. Stop the other process or change it in deploy/local/.env"
+  fi
+}
+
+build_backend() {
+  local needs_build=0
+  if [[ ! -f "$JAR" ]]; then
+    needs_build=1
+  elif [[ -n "$(find "$BACK_DIR/src/main" "$BACK_DIR/build.gradle" "$BACK_DIR/settings.gradle" -newer "$JAR" -print -quit 2>/dev/null)" ]]; then
+    needs_build=1
+  fi
+
+  if [[ "$needs_build" -eq 1 ]]; then
+    say "Building back-end jar (./gradlew bootJar)"
+    (cd "$BACK_DIR" && ./gradlew bootJar -x test --console=plain)
+    JAR_BUILT=1
+  fi
+
+  [[ -f "$JAR" ]] || die "jar not found at $JAR"
+}
+
+wait_backend() {
+  local code
+  for _ in $(seq 1 60); do
+    code="$(curl -s -o /dev/null -w '%{http_code}' -m 2 "http://localhost:$BACKEND_HOST_PORT/v3/api-docs" 2>/dev/null || true)"
+    if [[ "$code" == "200" || "$code" == "401" ]]; then
+      return 0
+    fi
+    sleep 2
+  done
+  "${COMPOSE[@]}" logs --tail=80 backend || true
+  die "back-end did not become ready on port $BACKEND_HOST_PORT"
+}
+
+stop_expo() {
+  if port_listening "$EXPO_PORT"; then
+    local pid
+    pid="$(ss -ltnp "sport = :$EXPO_PORT" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1)"
+    if [[ -n "$pid" ]] && ps -p "$pid" -o args= 2>/dev/null | grep -q 'expo'; then
+      echo "==> Stopping Expo"
+      kill "$pid" 2>/dev/null || true
+    fi
+  fi
+}
+
+stop_tunnel() {
+  if [[ -f "$CF_PID_FILE" ]]; then
+    local pid
+    pid="$(cat "$CF_PID_FILE")"
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "==> Stopping API tunnel"
+      kill "$pid" 2>/dev/null || true
+    fi
+    rm -f "$CF_PID_FILE" "$API_URL_FILE"
+  fi
+}
+
+start_tunnel() {
+  mkdir -p "$STATE_DIR"
+
+  if [[ -f "$CF_PID_FILE" && -f "$API_URL_FILE" ]]; then
+    local pid url code
+    pid="$(cat "$CF_PID_FILE")"
+    url="$(cat "$API_URL_FILE")"
+    if kill -0 "$pid" 2>/dev/null; then
+      # Quick tunnels can return 502/000 on some edge for a few seconds. Wait
+      # before deciding that the existing tunnel is dead.
+      for _ in $(seq 1 8); do
+        code="$(login_code "$url")"
+        [[ "$code" == "200" ]] && break
+        sleep 2
+      done
+      if [[ "$code" == "200" ]]; then
+        say "Reusing API tunnel: $url"
+        API_URL="$url"
+        return 0
+      fi
+      say "Existing API tunnel is not responding (HTTP $code); replacing it"
+    fi
+    stop_tunnel
+  fi
+
+  say "Opening cloudflared tunnel for the API"
+  : >"$CF_LOG"
+  setsid cloudflared tunnel --url "http://localhost:$BACKEND_HOST_PORT" --no-autoupdate \
+    >"$CF_LOG" 2>&1 &
+  echo "$!" >"$CF_PID_FILE"
+
+  API_URL=""
+  for _ in $(seq 1 60); do
+    API_URL="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$CF_LOG" 2>/dev/null | head -1 || true)"
+    [[ -n "$API_URL" ]] && break
+    sleep 1
+  done
+  if [[ -z "$API_URL" ]]; then
+    tail -30 "$CF_LOG" || true
+    stop_tunnel
+    die "could not determine the cloudflared URL"
+  fi
+
+  local code
+  for _ in $(seq 1 30); do
+    code="$(login_code "$API_URL")"
+    [[ "$code" == "200" ]] && break
+    sleep 2
+  done
+  if [[ "$code" != "200" ]]; then
+    tail -30 "$CF_LOG" || true
+    stop_tunnel
+    die "API tunnel is up but /auth/login returned $code"
+  fi
+
+  echo "$API_URL" >"$API_URL_FILE"
+  say "API tunnel: $API_URL"
+  if port_listening "$EXPO_PORT"; then
+    printf 'note: Expo is running with the previous URL; restart it to use the new tunnel.\n' >&2
+  fi
+}
+
+print_summary() {
+  cat <<EOF
+
+  API local:   http://localhost:$BACKEND_HOST_PORT
+  API túnel:   ${API_URL:-$(cat "$API_URL_FILE" 2>/dev/null || echo 'no iniciado')}
+  Login:       emailprueba@gmail.com / password
+  Expo:        ./dev app   (o simplemente ./dev para todo)
+
+EOF
+}
+
+up() {
+  need docker
+  need curl
+  need ss
+  need cloudflared
+  [[ -d "$BACK_DIR" ]] || die "back-end repo not found at $BACK_DIR"
+  [[ -d "$FRONT_DIR" ]] || die "front-end repo not found at $FRONT_DIR"
+
+  check_memory
+  ensure_override
+  assert_port_free "$BACKEND_HOST_PORT" backend
+  assert_port_free "$DB_HOST_PORT" db
+
+  build_backend
+
+  say "Starting Postgres and the back-end"
+  "${COMPOSE[@]}" up -d --wait
+  if [[ "$JAR_BUILT" -eq 1 ]]; then
+    # The jar changed; make sure the running container uses it.
+    "${COMPOSE[@]}" restart backend >/dev/null
+  fi
+
+  wait_backend
+  start_tunnel
+  print_summary
+}
+
+app() {
+  need npx
+  local url code
+  url="$(cat "$API_URL_FILE" 2>/dev/null || true)"
+  [[ -n "$url" ]] || die "no API tunnel yet. Run ./dev up first."
+
+  # A fresh quick tunnel can answer 502/000 on some Cloudflare edges for a few
+  # seconds even after the first successful check. Wait it out instead of
+  # aborting (and let the trap stop the tunnel) on a transient error.
+  for _ in $(seq 1 15); do
+    code="$(login_code "$url")"
+    [[ "$code" == "200" ]] && break
+    sleep 2
+  done
+  if [[ "$code" != "200" ]]; then
+    printf 'warning: API tunnel returned %s; starting Expo anyway.\n' "$code" >&2
+    printf '         If the app cannot reach the API, run ./dev up again.\n' >&2
+  fi
+  if port_listening "$EXPO_PORT"; then
+    die "port $EXPO_PORT is in use. Stop the other Expo or set EXPO_PORT in deploy/local/.env"
+  fi
+  [[ -d "$FRONT_DIR/node_modules/@expo/ngrok" ]] || {
+    say "Installing @expo/ngrok"
+    (cd "$FRONT_DIR" && npx expo install @expo/ngrok)
+  }
+
+  print_summary
+  echo "==> Starting Expo over tunnel. Scan the QR with Expo Go (SDK 58)."
+  echo "    Ctrl-C stops Expo and the API tunnel; the Docker stack stays up."
+  echo
+
+  cd "$FRONT_DIR"
+  EXPO_PUBLIC_API_URL="$url" npx expo start --tunnel ngrok --port "$EXPO_PORT"
+}
+
+down() {
+  stop_expo
+  stop_tunnel
+  "${COMPOSE[@]}" down
+  rm -rf "$STATE_DIR"
+  say "Stack stopped. Postgres data was preserved."
+}
+
+reset() {
+  stop_expo
+  stop_tunnel
+  "${COMPOSE[@]}" down -v
+  rm -rf "$STATE_DIR"
+  say "Stack stopped and the database volume was removed."
+}
+
+status() {
+  "${COMPOSE[@]}" ps
+  echo
+  echo "Back-end host port: $BACKEND_HOST_PORT"
+  echo "Postgres host port: $DB_HOST_PORT"
+  echo "Expo port:          $EXPO_PORT"
+  if [[ -f "$API_URL_FILE" ]]; then
+    echo "API tunnel:         $(cat "$API_URL_FILE")"
+  else
+    echo "API tunnel:         not running"
+  fi
+  echo "Login:              emailprueba@gmail.com / password"
+}
+
+logs() {
+  "${COMPOSE[@]}" logs -f --tail=100 backend
+}
+
+usage() {
+  sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+case "${1:-}" in
+  "")
+    trap stop_tunnel EXIT INT TERM
+    up
+    app
+    ;;
+  up) up ;;
+  app) app ;;
+  down) down ;;
+  reset) reset ;;
+  status) status ;;
+  logs) logs ;;
+  help | -h | --help) usage ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac

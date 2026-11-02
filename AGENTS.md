@@ -61,6 +61,12 @@ via Docker Compose; the front-end runs through Expo. There is no dev or
 production environment yet — do not add deployment scaffolding for them until
 a remote host exists.
 
+From `dmoney_platform/`, run `deploy/local/dev`: it builds the back-end jar if
+needed, starts Postgres + the back-end, opens a `cloudflared` quick tunnel for
+the API, and starts Expo with `EXPO_PUBLIC_API_URL` pointed at it. Host ports
+are 8090 (API), 5434 (Postgres) and 8083 (Expo); `deploy/local/dev down` stops
+the stack. See `deploy/README.md`.
+
 ## Cross-cutting conventions
 
 - **Git**: `docs/technical/git-workflow.md` is the authoritative policy for
